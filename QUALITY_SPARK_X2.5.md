@@ -37,7 +37,7 @@ cache-02/87 rank 2, web-03/41 rank 3. Task 3 = prints 5.5, raises on empty.
 
 |  | BF16 (7.66 GiB) | Q8_0 (4.07 GiB) | Q4_K_M (2.42 GiB) |
 |---|---|---|---|
-| T1 math ($9.46) | PASS | PASS | PASS |
+| T1 math ($9.46) | PASS | PASS* | PASS |
 | T2 exact JSON | FAIL (echoed schema only) | PASS | PASS |
 | T3 code runs (5.5 + ValueError) | PASS | PASS (own bubble sort) | PASS (via `.sort()`) |
 | Format discipline | partial | partial (closest to clean) | partial |
@@ -51,7 +51,7 @@ cache-02/87 rank 2, web-03/41 rank 3. Task 3 = prints 5.5, raises on empty.
   1024 tokens** — budget 4096 for this kind of test.
 - BF16, the "best" quant, is the only one that never emits the Task 2 JSON,
   despite 3x the VRAM and ~2.3x slower generation than Q4_K_M.
-- Q8_0 lands closest to clean final artifacts; Q4_K_M's code leans on the
+- Q8_0 lands closest to clean final artifacts (*math value right, but never on its own line – "So final answer: ANSWER: $9.46"); Q4_K_M's code leans on the
   `.sort()` method (within the letter of the ban, against its spirit).
 - Bottom line for real-world use: no quality advantage for BF16 here.
   Q4_K_M matches it task-for-task at 2.3x the generation speed, ~1/3 the
