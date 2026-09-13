@@ -61,12 +61,17 @@ python3 benchscope.py --per-test \
 
 ## Example
 
-`spark2_5 4B BF16` on AMD RX 6800M, ROCm full offload (`-r 5`, per-test):
+Spark-X2.5-4B quant comparison on AMD RX 6800M, ROCm full offload
+(`-p 512 -n 128 -r 3`, per-test):
 
-| test | t/s | ctx max fit | ctx used | VRAM | GPU% | temp | power |
-|---|---|---|---|---|---|---|---|
-| pp 512 | 477.69 ± 12.60 | 101673 | 512 (0.5%) | 8461/12272 MiB | 86/99 | 55 C | 113.5 W |
-| tg 128 | 39.14 ± 0.14 | 101673 | 128 (0.1%) | 8179/12272 MiB | 94/99 | 65 C | 130.7 W |
+| quant | size | pp 512 (t/s) | tg 128 (t/s) | ctx fit | VRAM | power (tg) |
+|---|---|---|---|---|---|---|
+| BF16 | 7.66 GiB | 474.36 ± 16.58 | 39.11 ± 0.18 | 101673 | ~8.2 GiB | 120.7 W |
+| Q8_0 | 4.07 GiB | 2148.70 ± 214.94 | 67.39 ± 0.54 | 206244 | ~4.6 GiB | 101.5 W |
+| Q4_K_M | 2.42 GiB | 1510.64 ± 102.93 | 98.47 ± 1.35 | 254389 | ~2.9 GiB | 116.0 W |
+
+Q8_0 leads prompt processing while Q4_K_M leads generation — the kind of
+trade-off this tool's per-phase telemetry makes visible.
 
 See `RUN_SPARK_X2.5_ON_RX6800M.txt` for the full story of getting that model
 running (it needed a llama.cpp update for `spark2_5` support).
