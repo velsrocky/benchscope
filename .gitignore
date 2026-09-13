@@ -1,0 +1,14 @@
+# local run outputs (regenerable)
+bench.json
+bench.csv
+bench.png
+bench.md
+bench_*.json
+bench_*.csv
+bench_*.png
+bench_*.md
+bench_enriched.json
+bench_timeseries.csv
+# python
+__pycache__/
+*.pyc

@@ -1,0 +1,88 @@
+How the Spark-X2.5-4B model was made to run on this machine
+=============================================================
+Date: 2026-09-13
+
+1. Hardware / software baseline
+-------------------------------
+- CPU: AMD Ryzen 9 5900HX with Radeon Graphics (16 threads), 30 GiB RAM
+- dGPU: AMD Radeon RX 6800M, ~12 GiB VRAM (/sys: 12868124672 bytes)
+- iGPU: AMD Radeon Graphics (shared memory)
+- OS: Ubuntu 26.04.1 LTS
+- ROCm: 7.x (hipconfig 7.15.x), libs in /opt/rocm/lib (NOT on ldconfig path)
+- llama.cpp checkout: ~/llama.cpp, HIP/ROCm Release build in ./build
+  (CMAKE_BUILD_TYPE=Release, GGML_HIP=ON, HIP compiler /opt/rocm/lib/llvm/bin/clang)
+- Model: ~/models/Spark-X2.5-4B.gguf
+  (BF16, 7.66 GiB, 4.11B params, arch "spark2_5", 36 layers,
+   native context 1M, GQA 4 KV heads, hybrid attention)
+
+2. Problem: model refused to load
+---------------------------------
+$ ./build/bin/llama-bench -m ~/models/Spark-X2.5-4B.gguf ...
+llama_model_load: error loading model: unknown model architecture: 'spark2_5'
+llama_bench: error: failed to load model '...'
+
+Two stacked issues found:
+(a) The local build was from 2026-08-28 (commit e70802a01), which predates
+    spark2_5 support. Only the unrelated "dspark" arch existed in src/.
+(b) The binary could not even start without help:
+    "error while loading shared libraries: libhipblas.so.3" because
+    /opt/rocm/lib is not registered with ldconfig and LD_LIBRARY_PATH was empty.
+
+3. Fix (a): update llama.cpp to a commit with Spark2_5 support
+--------------------------------------------------------------
+$ git fetch origin master
+$ git log origin/master --oneline --grep="spark" -i
+3ad1ba733 [Model] Support for Spark2_5ForCausalLM implementation (#27868)
+$ git merge --ff-only origin/master     # working tree was clean; landed on 5f436dddb
+$ cmake --build build --target llama-bench -j16
+Rebuilt only the llama-bench target with the existing HIP Release config
+(same flags, no reconfigure needed). Verify:
+$ ./build/bin/llama-bench -m ~/models/Spark-X2.5-4B.gguf -p 64 -n 0 -r 1 -o json
+-> model_type "spark2_5 ?B BF16", backend ROCm. Loads.
+
+4. Fix (b): ROCm library path
+-----------------------------
+Temporary workaround: export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
+Permanent fix: benchscope.py now injects /opt/rocm/lib (plus $ROCM_PATH/lib)
+into the bench subprocess environment itself (bench_env()), so no export is
+needed anymore. Missing-lib failures surface as exit 127.
+
+5. Benchmarking: benchscope wrapper
+-------------------------------------------
+Location: ~/projects/custom_llama_bench/benchscope.py
+Stock llama-bench prints static cpu_info/gpu_info/backends but no runtime
+telemetry, so the wrapper samples the system while bench runs and merges:
+- GPU name (rocm-smi, matched by VRAM size), VRAM used/total (sysfs
+  mem_info_vram_*), GPU busy % (gpu_busy_percent), temp + power (hwmon)
+- CPU % + RAM used/total (psutil)
+- ctx max fit: estimated max context with FULL weight offload:
+  budget = VRAM - weights - reserve (default 800 MiB, --ctx-reserve-mib);
+  KV bytes/token from GGUF hparams (Spark: 9 full + 27 sliding-window-512
+  layers, 4096 B/token/full-layer in f16); capped at native context.
+  A "*" marks native-limited models. ctx used = n_depth+n_prompt+n_gen.
+- Modes: single (one process, shared telemetry) vs --per-test (one process
+  per pp/tg/pg size, isolated telemetry, one model load per test).
+- Outputs: enriched JSON, timeseries CSV, markdown table, 16:9 PNG card
+  (--out-png, 1920x1080). Existing files are never overwritten: bench.png
+  -> bench_01.png, bench_02.png, ...
+
+6. Canonical run commands (from custom_llama_bench/)
+-----------------------------------------------------
+python3 benchscope.py --list-gpus
+python3 benchscope.py --per-test \
+  --llama-bench-bin ~/llama.cpp/build/bin/llama-bench \
+  --out-json spark-x2.5-4b.json --timeseries spark-x2.5-4b.csv \
+  --out-png spark-x2.5-4b.png -- \
+  -m ~/models/Spark-X2.5-4B.gguf -p 512 -n 128 -r 5
+(Anything after "--" passes straight to llama-bench: -t, -ngl, -b, -ctk, -d...)
+
+7. Result for Spark-X2.5-4B.gguf (RX 6800M, full offload, r=5, per-test)
+------------------------------------------------------------------------
+| test   | t/s            | ctx fit | ctx used  | VRAM          | GPU%  | temp | power  |
+| pp 512 | 477.69 +/-12.6 | 101673  | 512 (0.5%)| 8461/12272MiB | 86/99 | 55 C | 113.5W |
+| tg 128 | 39.14  +/-0.14 | 101673  | 128 (0.1%)| 8179/12272MiB | 94/99 | 65 C | 130.7W |
+Saved: spark-x2.5-4b.json / spark-x2.5-4b.csv in custom_llama_bench/.
+Note: tg is the hot phase (~131 W, 65 C). At 512/128 tokens only ~0.5% of
+the ~101K GPU-fit window is used; use -d prefill to probe long context.
+Related variants on disk for quant comparison: Spark-X2.5-4B-Q4_K_M.gguf,
+Spark-X2.5-4B-Q8_0.gguf.
